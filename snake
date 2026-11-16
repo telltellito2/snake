@@ -10,7 +10,7 @@ $gridWidth = 30
 $gridHeight = 20
 
 $snake = @()
-$food = $null
+$foods = @()
 
 $direction = "Right"
 $nextDirection = "Right"
@@ -26,7 +26,7 @@ $form = New-Object System.Windows.Forms.Form
 
 $form.Text = "Snake"
 $form.ClientSize = New-Object System.Drawing.Size(1000,700)
-$form.MinimumSize = New-Object System.Drawing.Size(600,450)
+$form.MinimumSize = New-Object System.Drawing.Size(700,450)
 $form.StartPosition = "CenterScreen"
 $form.BackColor = [System.Drawing.Color]::Black
 $form.KeyPreview = $true
@@ -134,7 +134,7 @@ $speedLabel.Font =
 $speedLabel.AutoSize = $true
 
 $speedLabel.Location =
-    New-Object System.Drawing.Point(130,18)
+    New-Object System.Drawing.Point(125,18)
 
 $bottomPanel.Controls.Add($speedLabel)
 
@@ -153,11 +153,11 @@ $speedSlider.TickFrequency = 1
 $speedSlider.SmallChange = 1
 $speedSlider.LargeChange = 1
 
-$speedSlider.Width = 190
+$speedSlider.Width = 150
 $speedSlider.Height = 40
 
 $speedSlider.Location =
-    New-Object System.Drawing.Point(180,7)
+    New-Object System.Drawing.Point(175,7)
 
 $script:speedSlider = $speedSlider
 
@@ -188,11 +188,94 @@ $speedValueLabel.Font =
 $speedValueLabel.AutoSize = $true
 
 $speedValueLabel.Location =
-    New-Object System.Drawing.Point(375,18)
+    New-Object System.Drawing.Point(330,18)
 
 $script:speedValueLabel = $speedValueLabel
 
 $bottomPanel.Controls.Add($speedValueLabel)
+
+# ==========================================
+# APPLES LABEL
+# ==========================================
+
+$appleLabel =
+    New-Object System.Windows.Forms.Label
+
+$appleLabel.Text = "Apples:"
+$appleLabel.ForeColor =
+    [System.Drawing.Color]::White
+
+$appleLabel.BackColor =
+    [System.Drawing.Color]::Transparent
+
+$appleLabel.Font =
+    New-Object System.Drawing.Font(
+        "Arial",
+        10
+    )
+
+$appleLabel.AutoSize = $true
+
+$appleLabel.Location =
+    New-Object System.Drawing.Point(370,18)
+
+$bottomPanel.Controls.Add($appleLabel)
+
+# ==========================================
+# APPLES SLIDER
+# ==========================================
+
+$appleSlider =
+    New-Object System.Windows.Forms.TrackBar
+
+$appleSlider.Minimum = 1
+$appleSlider.Maximum = 10
+$appleSlider.Value = 1
+
+$appleSlider.TickFrequency = 1
+$appleSlider.SmallChange = 1
+$appleSlider.LargeChange = 1
+
+$appleSlider.Width = 150
+$appleSlider.Height = 40
+
+$appleSlider.Location =
+    New-Object System.Drawing.Point(425,7)
+
+$script:appleSlider = $appleSlider
+
+$bottomPanel.Controls.Add($appleSlider)
+
+# ==========================================
+# APPLES NUMBER
+# ==========================================
+
+$appleValueLabel =
+    New-Object System.Windows.Forms.Label
+
+$appleValueLabel.Text = "1"
+
+$appleValueLabel.ForeColor =
+    [System.Drawing.Color]::White
+
+$appleValueLabel.BackColor =
+    [System.Drawing.Color]::Transparent
+
+$appleValueLabel.Font =
+    New-Object System.Drawing.Font(
+        "Arial",
+        10,
+        [System.Drawing.FontStyle]::Bold
+    )
+
+$appleValueLabel.AutoSize = $true
+
+$appleValueLabel.Location =
+    New-Object System.Drawing.Point(580,18)
+
+$script:appleValueLabel = $appleValueLabel
+
+$bottomPanel.Controls.Add($appleValueLabel)
 
 # ==========================================
 # RESTART BUTTON
@@ -295,6 +378,11 @@ function Get-BoardSettings {
 
 function New-Food {
 
+    $totalCells = $gridWidth * $gridHeight
+    if (($script:snake.Count + $script:foods.Count) -ge $totalCells) {
+        return $null
+    }
+
     do {
 
         $x =
@@ -321,11 +409,40 @@ function New-Food {
             }
         }
 
+        if (-not $occupied) {
+            foreach ($f in $script:foods) {
+                if (
+                    $f.X -eq $x -and
+                    $f.Y -eq $y
+                ) {
+                    $occupied = $true
+                    break
+                }
+            }
+        }
+
     } while ($occupied)
 
     return [PSCustomObject]@{
         X = $x
         Y = $y
+    }
+}
+
+function Sync-FoodCount {
+
+    $targetCount = $script:appleSlider.Value
+
+    while ($script:foods.Count -lt $targetCount) {
+        $newApple = New-Food
+        if ($null -eq $newApple) {
+            break
+        }
+        $script:foods += $newApple
+    }
+
+    if ($script:foods.Count -gt $targetCount) {
+        $script:foods = @($script:foods[0..($targetCount - 1)])
     }
 }
 
@@ -376,8 +493,8 @@ function Start-Game {
     $script:restartButton.Visible =
         $false
 
-    $script:food =
-        New-Food
+    $script:foods = @()
+    Sync-FoodCount
 
     $speed =
         $script:speedSlider.Value
@@ -515,18 +632,32 @@ $timer.Add_Tick({
     # FOOD
     # ======================================
 
-    if (
-        $newHead.X -eq $script:food.X -and
-        $newHead.Y -eq $script:food.Y
-    ) {
+    $ateFood = $false
+    $remainingFoods = @()
+
+    foreach ($f in $script:foods) {
+        if (
+            -not $ateFood -and
+            $newHead.X -eq $f.X -and
+            $newHead.Y -eq $f.Y
+        ) {
+            $ateFood = $true
+        }
+        else {
+            $remainingFoods += $f
+        }
+    }
+
+    if ($ateFood) {
+
+        $script:foods = $remainingFoods
 
         $script:score++
 
         $script:scoreLabel.Text =
             "Score: $($script:score)"
 
-        $script:food =
-            New-Food
+        Sync-FoodCount
     }
     else {
 
@@ -565,10 +696,29 @@ $speedSlider.Add_ValueChanged({
 })
 
 # ==========================================
-# PREVENT SLIDER FROM USING ARROW KEYS
+# APPLES SLIDER
 # ==========================================
 
-$speedSlider.Add_KeyDown({
+$appleSlider.Add_ValueChanged({
+
+    $count =
+        $script:appleSlider.Value
+
+    $script:appleValueLabel.Text =
+        "$count"
+
+    Sync-FoodCount
+
+    if ($script:panel) {
+        $script:panel.Invalidate()
+    }
+})
+
+# ==========================================
+# PREVENT SLIDERS FROM USING ARROW KEYS
+# ==========================================
+
+$preventArrowKeys = {
 
     param($sender,$e)
 
@@ -589,7 +739,10 @@ $speedSlider.Add_KeyDown({
         $e.SuppressKeyPress = $true
         $e.Handled = $true
     }
-})
+}
+
+$speedSlider.Add_KeyDown($preventArrowKeys)
+$appleSlider.Add_KeyDown($preventArrowKeys)
 
 # ==========================================
 # DRAWING
@@ -699,25 +852,11 @@ $panel.Add_Paint({
     # FOOD
     # ======================================
 
-    if ($script:food) {
+    if ($script:foods.Count -gt 0) {
 
         $foodBrush =
             New-Object System.Drawing.SolidBrush(
                 [System.Drawing.Color]::Red
-            )
-
-        $fx =
-            $script:boardX +
-            (
-                $script:food.X *
-                $script:drawCell
-            )
-
-        $fy =
-            $script:boardY +
-            (
-                $script:food.Y *
-                $script:drawCell
             )
 
         $foodSize =
@@ -726,13 +865,30 @@ $panel.Add_Paint({
                 $script:drawCell - 6
             )
 
-        $g.FillEllipse(
-            $foodBrush,
-            $fx + 3,
-            $fy + 3,
-            $foodSize,
-            $foodSize
-        )
+        foreach ($f in $script:foods) {
+
+            $fx =
+                $script:boardX +
+                (
+                    $f.X *
+                    $script:drawCell
+                )
+
+            $fy =
+                $script:boardY +
+                (
+                    $f.Y *
+                    $script:drawCell
+                )
+
+            $g.FillEllipse(
+                $foodBrush,
+                $fx + 3,
+                $fy + 3,
+                $foodSize,
+                $foodSize
+            )
+        }
 
         $foodBrush.Dispose()
     }
@@ -984,5 +1140,3 @@ Get-BoardSettings
 Start-Game
 
 [void]$form.ShowDialog()
-
-
