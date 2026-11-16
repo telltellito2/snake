@@ -1,0 +1,988 @@
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# ==========================================
+# SNAKE - WASD + NO FLICKER
+# Windows PowerShell 5.1
+# ==========================================
+
+$gridWidth = 30
+$gridHeight = 20
+
+$snake = @()
+$food = $null
+
+$direction = "Right"
+$nextDirection = "Right"
+
+$score = 0
+$gameOver = $false
+
+# ==========================================
+# WINDOW
+# ==========================================
+
+$form = New-Object System.Windows.Forms.Form
+
+$form.Text = "Snake"
+$form.ClientSize = New-Object System.Drawing.Size(1000,700)
+$form.MinimumSize = New-Object System.Drawing.Size(600,450)
+$form.StartPosition = "CenterScreen"
+$form.BackColor = [System.Drawing.Color]::Black
+$form.KeyPreview = $true
+
+$script:form = $form
+
+# ==========================================
+# GAME PANEL
+# ==========================================
+
+$panel = New-Object System.Windows.Forms.Panel
+
+$panel.Dock = "Fill"
+$panel.BackColor = [System.Drawing.Color]::Black
+
+# Enable double buffering WITHOUT C#
+$doubleBufferedProperty = $panel.GetType().GetProperty(
+    "DoubleBuffered",
+    [System.Reflection.BindingFlags]::Instance -bor
+    [System.Reflection.BindingFlags]::NonPublic
+)
+
+if ($doubleBufferedProperty) {
+    $doubleBufferedProperty.SetValue(
+        $panel,
+        $true,
+        $null
+    )
+}
+
+$panel.SetStyle(
+    [System.Windows.Forms.ControlStyles]::UserPaint -bor
+    [System.Windows.Forms.ControlStyles]::AllPaintingInWmPaint -bor
+    [System.Windows.Forms.ControlStyles]::OptimizedDoubleBuffer,
+    $true
+)
+
+$panel.UpdateStyles()
+
+$script:panel = $panel
+
+$form.Controls.Add($panel)
+
+# ==========================================
+# BOTTOM CONTROLS
+# ==========================================
+
+$bottomPanel = New-Object System.Windows.Forms.Panel
+
+$bottomPanel.Dock = "Bottom"
+$bottomPanel.Height = 55
+$bottomPanel.BackColor =
+    [System.Drawing.Color]::FromArgb(25,25,25)
+
+$script:bottomPanel = $bottomPanel
+
+$form.Controls.Add($bottomPanel)
+
+# ==========================================
+# SCORE
+# ==========================================
+
+$scoreLabel = New-Object System.Windows.Forms.Label
+
+$scoreLabel.Text = "Score: 0"
+$scoreLabel.ForeColor = [System.Drawing.Color]::White
+$scoreLabel.BackColor = [System.Drawing.Color]::Transparent
+
+$scoreLabel.Font =
+    New-Object System.Drawing.Font(
+        "Arial",
+        12,
+        [System.Drawing.FontStyle]::Bold
+    )
+
+$scoreLabel.AutoSize = $true
+
+$scoreLabel.Location =
+    New-Object System.Drawing.Point(15,16)
+
+$script:scoreLabel = $scoreLabel
+
+$bottomPanel.Controls.Add($scoreLabel)
+
+# ==========================================
+# SPEED LABEL
+# ==========================================
+
+$speedLabel =
+    New-Object System.Windows.Forms.Label
+
+$speedLabel.Text = "Speed:"
+$speedLabel.ForeColor =
+    [System.Drawing.Color]::White
+
+$speedLabel.BackColor =
+    [System.Drawing.Color]::Transparent
+
+$speedLabel.Font =
+    New-Object System.Drawing.Font(
+        "Arial",
+        10
+    )
+
+$speedLabel.AutoSize = $true
+
+$speedLabel.Location =
+    New-Object System.Drawing.Point(130,18)
+
+$bottomPanel.Controls.Add($speedLabel)
+
+# ==========================================
+# SPEED SLIDER
+# ==========================================
+
+$speedSlider =
+    New-Object System.Windows.Forms.TrackBar
+
+$speedSlider.Minimum = 1
+$speedSlider.Maximum = 10
+$speedSlider.Value = 5
+
+$speedSlider.TickFrequency = 1
+$speedSlider.SmallChange = 1
+$speedSlider.LargeChange = 1
+
+$speedSlider.Width = 190
+$speedSlider.Height = 40
+
+$speedSlider.Location =
+    New-Object System.Drawing.Point(180,7)
+
+$script:speedSlider = $speedSlider
+
+$bottomPanel.Controls.Add($speedSlider)
+
+# ==========================================
+# SPEED NUMBER
+# ==========================================
+
+$speedValueLabel =
+    New-Object System.Windows.Forms.Label
+
+$speedValueLabel.Text = "5"
+
+$speedValueLabel.ForeColor =
+    [System.Drawing.Color]::White
+
+$speedValueLabel.BackColor =
+    [System.Drawing.Color]::Transparent
+
+$speedValueLabel.Font =
+    New-Object System.Drawing.Font(
+        "Arial",
+        10,
+        [System.Drawing.FontStyle]::Bold
+    )
+
+$speedValueLabel.AutoSize = $true
+
+$speedValueLabel.Location =
+    New-Object System.Drawing.Point(375,18)
+
+$script:speedValueLabel = $speedValueLabel
+
+$bottomPanel.Controls.Add($speedValueLabel)
+
+# ==========================================
+# RESTART BUTTON
+# ==========================================
+
+$restartButton =
+    New-Object System.Windows.Forms.Button
+
+$restartButton.Text = "Restart"
+
+$restartButton.Size =
+    New-Object System.Drawing.Size(90,30)
+
+$restartButton.Anchor = "Top,Right"
+
+$restartButton.Visible = $false
+
+$script:restartButton = $restartButton
+
+$bottomPanel.Controls.Add($restartButton)
+
+# ==========================================
+# BOARD VARIABLES
+# ==========================================
+
+$script:drawCell = 10
+$script:boardWidth = 300
+$script:boardHeight = 200
+$script:boardX = 0
+$script:boardY = 0
+
+# ==========================================
+# BOARD SIZING
+# ==========================================
+
+function Get-BoardSettings {
+
+    if ($null -eq $script:panel) {
+        return
+    }
+
+    $availableWidth =
+        $script:panel.ClientSize.Width
+
+    $availableHeight =
+        $script:panel.ClientSize.Height
+
+    if (
+        $availableWidth -le 0 -or
+        $availableHeight -le 0
+    ) {
+        return
+    }
+
+    $cellWidth =
+        [Math]::Floor(
+            $availableWidth / $gridWidth
+        )
+
+    $cellHeight =
+        [Math]::Floor(
+            $availableHeight / $gridHeight
+        )
+
+    $script:drawCell =
+        [Math]::Max(
+            5,
+            [Math]::Min(
+                $cellWidth,
+                $cellHeight
+            )
+        )
+
+    $script:boardWidth =
+        $script:drawCell * $gridWidth
+
+    $script:boardHeight =
+        $script:drawCell * $gridHeight
+
+    $script:boardX =
+        [Math]::Floor(
+            (
+                $availableWidth -
+                $script:boardWidth
+            ) / 2
+        )
+
+    $script:boardY =
+        [Math]::Floor(
+            (
+                $availableHeight -
+                $script:boardHeight
+            ) / 2
+        )
+}
+
+# ==========================================
+# CREATE FOOD
+# ==========================================
+
+function New-Food {
+
+    do {
+
+        $x =
+            Get-Random `
+                -Minimum 0 `
+                -Maximum $gridWidth
+
+        $y =
+            Get-Random `
+                -Minimum 0 `
+                -Maximum $gridHeight
+
+        $occupied = $false
+
+        foreach ($part in $script:snake) {
+
+            if (
+                $part.X -eq $x -and
+                $part.Y -eq $y
+            ) {
+
+                $occupied = $true
+                break
+            }
+        }
+
+    } while ($occupied)
+
+    return [PSCustomObject]@{
+        X = $x
+        Y = $y
+    }
+}
+
+# ==========================================
+# TIMER
+# ==========================================
+
+$timer =
+    New-Object System.Windows.Forms.Timer
+
+$timer.Interval = 110
+
+$script:timer = $timer
+
+# ==========================================
+# START / RESTART GAME
+# ==========================================
+
+function Start-Game {
+
+    $script:snake = @(
+
+        [PSCustomObject]@{
+            X = 15
+            Y = 10
+        }
+
+        [PSCustomObject]@{
+            X = 14
+            Y = 10
+        }
+
+        [PSCustomObject]@{
+            X = 13
+            Y = 10
+        }
+    )
+
+    $script:direction = "Right"
+    $script:nextDirection = "Right"
+
+    $script:score = 0
+    $script:gameOver = $false
+
+    $script:scoreLabel.Text =
+        "Score: 0"
+
+    $script:restartButton.Visible =
+        $false
+
+    $script:food =
+        New-Food
+
+    $speed =
+        $script:speedSlider.Value
+
+    $script:timer.Interval =
+        210 - ($speed * 20)
+
+    Get-BoardSettings
+
+    $script:timer.Start()
+
+    if ($script:panel) {
+        $script:panel.Invalidate()
+    }
+}
+
+# ==========================================
+# GAME LOOP
+# ==========================================
+
+$timer.Add_Tick({
+
+    if ($script:gameOver) {
+        return
+    }
+
+    $script:direction =
+        $script:nextDirection
+
+    $head =
+        $script:snake[0]
+
+    # ======================================
+    # CALCULATE NEW HEAD
+    # ======================================
+
+    switch ($script:direction) {
+
+        "Up" {
+
+            $newHead =
+                [PSCustomObject]@{
+                    X = $head.X
+                    Y = $head.Y - 1
+                }
+        }
+
+        "Down" {
+
+            $newHead =
+                [PSCustomObject]@{
+                    X = $head.X
+                    Y = $head.Y + 1
+                }
+        }
+
+        "Left" {
+
+            $newHead =
+                [PSCustomObject]@{
+                    X = $head.X - 1
+                    Y = $head.Y
+                }
+        }
+
+        "Right" {
+
+            $newHead =
+                [PSCustomObject]@{
+                    X = $head.X + 1
+                    Y = $head.Y
+                }
+        }
+    }
+
+    # ======================================
+    # WALL COLLISION
+    # ======================================
+
+    if (
+        $newHead.X -lt 0 -or
+        $newHead.X -ge $gridWidth -or
+        $newHead.Y -lt 0 -or
+        $newHead.Y -ge $gridHeight
+    ) {
+
+        $script:gameOver = $true
+
+        $script:timer.Stop()
+
+        $script:restartButton.Visible =
+            $true
+
+        if ($script:panel) {
+            $script:panel.Invalidate()
+        }
+
+        return
+    }
+
+    # ======================================
+    # SNAKE COLLISION
+    # ======================================
+
+    foreach ($part in $script:snake) {
+
+        if (
+            $newHead.X -eq $part.X -and
+            $newHead.Y -eq $part.Y
+        ) {
+
+            $script:gameOver = $true
+
+            $script:timer.Stop()
+
+            $script:restartButton.Visible =
+                $true
+
+            if ($script:panel) {
+                $script:panel.Invalidate()
+            }
+
+            return
+        }
+    }
+
+    # ======================================
+    # ADD NEW HEAD
+    # ======================================
+
+    $script:snake =
+        @($newHead) + $script:snake
+
+    # ======================================
+    # FOOD
+    # ======================================
+
+    if (
+        $newHead.X -eq $script:food.X -and
+        $newHead.Y -eq $script:food.Y
+    ) {
+
+        $script:score++
+
+        $script:scoreLabel.Text =
+            "Score: $($script:score)"
+
+        $script:food =
+            New-Food
+    }
+    else {
+
+        if ($script:snake.Count -gt 1) {
+
+            $script:snake =
+                $script:snake[
+                    0..($script:snake.Count - 2)
+                ]
+        }
+    }
+
+    # ======================================
+    # REDRAW
+    # ======================================
+
+    if ($script:panel) {
+        $script:panel.Invalidate()
+    }
+})
+
+# ==========================================
+# SPEED SLIDER
+# ==========================================
+
+$speedSlider.Add_ValueChanged({
+
+    $speed =
+        $script:speedSlider.Value
+
+    $script:timer.Interval =
+        210 - ($speed * 20)
+
+    $script:speedValueLabel.Text =
+        "$speed"
+})
+
+# ==========================================
+# PREVENT SLIDER FROM USING ARROW KEYS
+# ==========================================
+
+$speedSlider.Add_KeyDown({
+
+    param($sender,$e)
+
+    if (
+        $e.KeyCode -eq
+            [System.Windows.Forms.Keys]::Left -or
+
+        $e.KeyCode -eq
+            [System.Windows.Forms.Keys]::Right -or
+
+        $e.KeyCode -eq
+            [System.Windows.Forms.Keys]::Up -or
+
+        $e.KeyCode -eq
+            [System.Windows.Forms.Keys]::Down
+    ) {
+
+        $e.SuppressKeyPress = $true
+        $e.Handled = $true
+    }
+})
+
+# ==========================================
+# DRAWING
+# ==========================================
+
+$panel.Add_Paint({
+
+    param($sender,$e)
+
+    Get-BoardSettings
+
+    $g =
+        $e.Graphics
+
+    # No smoothing.
+    # Double buffering prevents flickering.
+
+    $g.SmoothingMode =
+        [System.Drawing.Drawing2D.SmoothingMode]::None
+
+    $g.PixelOffsetMode =
+        [System.Drawing.Drawing2D.PixelOffsetMode]::Default
+
+    # ======================================
+    # BACKGROUND
+    # ======================================
+
+    $g.Clear(
+        [System.Drawing.Color]::Black
+    )
+
+    # ======================================
+    # BOARD
+    # ======================================
+
+    $boardBrush =
+        New-Object System.Drawing.SolidBrush(
+            [System.Drawing.Color]::FromArgb(
+                12,12,12
+            )
+        )
+
+    $g.FillRectangle(
+        $boardBrush,
+        $script:boardX,
+        $script:boardY,
+        $script:boardWidth,
+        $script:boardHeight
+    )
+
+    $boardBrush.Dispose()
+
+    # ======================================
+    # GRID
+    # ======================================
+
+    $gridPen =
+        New-Object System.Drawing.Pen(
+            [System.Drawing.Color]::FromArgb(
+                30,30,30
+            )
+        )
+
+    for (
+        $x = 0;
+        $x -le $gridWidth;
+        $x++
+    ) {
+
+        $px =
+            $script:boardX +
+            ($x * $script:drawCell)
+
+        $g.DrawLine(
+            $gridPen,
+            $px,
+            $script:boardY,
+            $px,
+            $script:boardY +
+            $script:boardHeight
+        )
+    }
+
+    for (
+        $y = 0;
+        $y -le $gridHeight;
+        $y++
+    ) {
+
+        $py =
+            $script:boardY +
+            ($y * $script:drawCell)
+
+        $g.DrawLine(
+            $gridPen,
+            $script:boardX,
+            $py,
+            $script:boardX +
+            $script:boardWidth,
+            $py
+        )
+    }
+
+    $gridPen.Dispose()
+
+    # ======================================
+    # FOOD
+    # ======================================
+
+    if ($script:food) {
+
+        $foodBrush =
+            New-Object System.Drawing.SolidBrush(
+                [System.Drawing.Color]::Red
+            )
+
+        $fx =
+            $script:boardX +
+            (
+                $script:food.X *
+                $script:drawCell
+            )
+
+        $fy =
+            $script:boardY +
+            (
+                $script:food.Y *
+                $script:drawCell
+            )
+
+        $foodSize =
+            [Math]::Max(
+                1,
+                $script:drawCell - 6
+            )
+
+        $g.FillEllipse(
+            $foodBrush,
+            $fx + 3,
+            $fy + 3,
+            $foodSize,
+            $foodSize
+        )
+
+        $foodBrush.Dispose()
+    }
+
+    # ======================================
+    # SNAKE
+    # ======================================
+
+    for (
+        $i = 0;
+        $i -lt $script:snake.Count;
+        $i++
+    ) {
+
+        $part =
+            $script:snake[$i]
+
+        if ($i -eq 0) {
+
+            $color =
+                [System.Drawing.Color]::LimeGreen
+        }
+        else {
+
+            $color =
+                [System.Drawing.Color]::Green
+        }
+
+        $brush =
+            New-Object System.Drawing.SolidBrush(
+                $color
+            )
+
+        $sx =
+            $script:boardX +
+            (
+                $part.X *
+                $script:drawCell
+            )
+
+        $sy =
+            $script:boardY +
+            (
+                $part.Y *
+                $script:drawCell
+            )
+
+        $size =
+            [Math]::Max(
+                1,
+                $script:drawCell - 4
+            )
+
+        $g.FillRectangle(
+            $brush,
+            $sx + 2,
+            $sy + 2,
+            $size,
+            $size
+        )
+
+        $brush.Dispose()
+    }
+
+    # ======================================
+    # GAME OVER
+    # ======================================
+
+    if ($script:gameOver) {
+
+        $overlay =
+            New-Object System.Drawing.SolidBrush(
+                [System.Drawing.Color]::FromArgb(
+                    180,0,0,0
+                )
+            )
+
+        $g.FillRectangle(
+            $overlay,
+            $script:boardX,
+            $script:boardY,
+            $script:boardWidth,
+            $script:boardHeight
+        )
+
+        $overlay.Dispose()
+
+        $fontSize =
+            [Math]::Max(
+                24,
+                [Math]::Floor(
+                    $script:drawCell * 1.5
+                )
+            )
+
+        $font =
+            New-Object System.Drawing.Font(
+                "Arial",
+                $fontSize,
+                [System.Drawing.FontStyle]::Bold
+            )
+
+        $textBrush =
+            New-Object System.Drawing.SolidBrush(
+                [System.Drawing.Color]::White
+            )
+
+        $text = "GAME OVER"
+
+        $textSize =
+            $g.MeasureString(
+                $text,
+                $font
+            )
+
+        $tx =
+            $script:boardX +
+            (
+                (
+                    $script:boardWidth -
+                    $textSize.Width
+                ) / 2
+            )
+
+        $ty =
+            $script:boardY +
+            (
+                (
+                    $script:boardHeight -
+                    $textSize.Height
+                ) / 2
+            )
+
+        $g.DrawString(
+            $text,
+            $font,
+            $textBrush,
+            $tx,
+            $ty
+        )
+
+        $textBrush.Dispose()
+        $font.Dispose()
+    }
+})
+
+# ==========================================
+# WASD CONTROLS
+# ==========================================
+
+$form.Add_KeyDown({
+
+    param($sender,$e)
+
+    switch ($e.KeyCode) {
+
+        "W" {
+
+            if ($script:direction -ne "Down") {
+                $script:nextDirection = "Up"
+            }
+
+            $e.SuppressKeyPress = $true
+            $e.Handled = $true
+        }
+
+        "S" {
+
+            if ($script:direction -ne "Up") {
+                $script:nextDirection = "Down"
+            }
+
+            $e.SuppressKeyPress = $true
+            $e.Handled = $true
+        }
+
+        "A" {
+
+            if ($script:direction -ne "Right") {
+                $script:nextDirection = "Left"
+            }
+
+            $e.SuppressKeyPress = $true
+            $e.Handled = $true
+        }
+
+        "D" {
+
+            if ($script:direction -ne "Left") {
+                $script:nextDirection = "Right"
+            }
+
+            $e.SuppressKeyPress = $true
+            $e.Handled = $true
+        }
+
+        "Escape" {
+
+            $script:form.Close()
+        }
+    }
+})
+
+# ==========================================
+# RESTART BUTTON
+# ==========================================
+
+$restartButton.Add_Click({
+
+    Start-Game
+
+    $script:form.Focus()
+})
+
+# ==========================================
+# RESIZE
+# ==========================================
+
+$form.Add_Resize({
+
+    Get-BoardSettings
+
+    if ($script:panel) {
+        $script:panel.Invalidate()
+    }
+
+    if (
+        $script:restartButton -and
+        $script:bottomPanel
+    ) {
+
+        $script:restartButton.Location =
+            New-Object System.Drawing.Point(
+                (
+                    $script:bottomPanel.ClientSize.Width -
+                    100
+                ),
+                12
+            )
+    }
+})
+
+# ==========================================
+# START GAME
+# ==========================================
+
+Get-BoardSettings
+
+Start-Game
+
+[void]$form.ShowDialog()
+
+
